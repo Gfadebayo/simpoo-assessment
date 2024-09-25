@@ -1,0 +1,58 @@
+import com.exzell.simpooassessment.local.model.MessageType;
+import com.exzell.simpooassessment.local.model.SendStatus;
+import kotlin.Boolean;
+
+CREATE TABLE IF NOT EXISTS message (
+    _id TEXT NOT NULL PRIMARY KEY,
+    who TEXT NOT NULL,
+    is_by_me INTEGER AS Boolean NOT NULL,
+    body TEXT NOT NULL,
+    type TEXT AS MessageType NOT NULL,
+    status TEXT AS SendStatus NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX message_type_who ON message(type, who);
+
+CREATE TRIGGER set_created_at_message
+AFTER INSERT ON message
+FOR EACH ROW
+BEGIN
+  UPDATE message
+  SET created_at = strftime('%s', 'now')
+  WHERE _id = new._id;
+END;
+
+CREATE TRIGGER update_last_modified_at_message
+AFTER UPDATE ON message
+FOR EACH ROW
+BEGIN
+  UPDATE message
+  SET updated_at = strftime('%s', 'now')
+  WHERE _id = new._id;
+END;
+
+insertMessage:
+INSERT INTO 
+message (_id, who, is_by_me, body, type, status) 
+VALUES (?,  ?, ?, ?, ?, ?);
+
+update:
+UPDATE
+message
+SET
+who = :who, type = :type, status = :status, body = :body
+WHERE type = :type AND who = :who;
+
+senderForType:
+SELECT DISTINCT
+who
+FROM message
+WHERE type = :type;
+
+allMessagesForType:
+SELECT * FROM message WHERE type = :type;
+
+allMessageBySenderWithType:
+SELECT * FROM message WHERE type = :type AND who = :who ORDER BY created_at;
