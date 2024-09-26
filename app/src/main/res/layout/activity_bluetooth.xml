@@ -16,11 +16,17 @@
             android:layout_height="wrap_content"
             app:menu="@menu/bluetooth"
             app:title="Bluetooth"/>
+
+        <Button
+            android:id="@+id/button_new"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Create new socket connection" />
     </com.google.android.material.appbar.AppBarLayout>
 
     <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="match_parent"
         android:layout_marginTop="12dp"
         app:layout_behavior="com.google.android.material.appbar.AppBarLayout$ScrollingViewBehavior">
 
