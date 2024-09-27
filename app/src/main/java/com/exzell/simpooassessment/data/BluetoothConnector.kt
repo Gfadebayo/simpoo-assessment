@@ -49,10 +49,10 @@ object BluetoothConnector {
 
             val bluetoothReceiver = object: BroadcastReceiver() {
                 override fun onReceive(context: Context, intent: Intent) {
+                    logcat { "Bluetooth device found $intent" }
+
                     if (intent.action == BluetoothDevice.ACTION_FOUND) {
                         IntentCompat.getParcelableExtra(intent, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)?.also {
-                            logcat { "Bluetooth device found $it" }
-
                             if (it.address == null || it.name == null) return
 
                             total.add(it)
@@ -64,6 +64,7 @@ object BluetoothConnector {
 
         val discoverReceiver = object: BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                logcat { "Discovery finished" }
                 if (intent.action == BluetoothAdapter.ACTION_DISCOVERY_FINISHED) {
                     close(Exception(ERROR_SEARCH_COMPLETE))
                 }
@@ -105,13 +106,13 @@ object BluetoothConnector {
 
     private val OBEX_UUID = UUID.fromString("d51e2d9f-4846-4963-b3cc-ae6d7b0bf8b5")
 
-    suspend fun bondAndConnect(context: Context, deviceID: String): BluetoothSocket? {
+    suspend fun connect(context: Context, deviceID: String): BluetoothSocket? {
         val manager = ContextCompat.getSystemService(context, BluetoothManager::class.java)!!
         val adapter = manager.adapter!!
 
         val device = adapter.getRemoteDevice(deviceID)
 
-        return bondAndConnect(context, device)
+        return connect(context, device)
     }
 
     suspend fun createSocket(context: Context): Pair<String, BluetoothSocket> {
@@ -145,71 +146,12 @@ object BluetoothConnector {
         }
     }
 
-    @SuppressLint("MissingPermission")
-    suspend fun bondAndConnect(context: Context, device: BluetoothDevice): BluetoothSocket? {
+    suspend fun connect(context: Context, device: BluetoothDevice): BluetoothSocket? {
         val manager = ContextCompat.getSystemService(context, BluetoothManager::class.java)!!
         val adapter = manager.adapter!!
 
-        suspend fun checkAndBond(): Boolean {
-            return if(device.bondState != BluetoothDevice.BOND_BONDED) {
-                suspendCoroutine {
-                    val bondReceiver = object: BroadcastReceiver() {
-                        override fun onReceive(context: Context?, intent: Intent?) {
-                            logcat { "Intent received with extras: ${intent?.extras?.toString()}" }
-                            if(intent?.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
-                                val state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
-
-                                if(state != BluetoothDevice.BOND_BONDING) {
-                                    context?.unregisterReceiver(this)
-                                    it.resume(state == BluetoothDevice.BOND_BONDED)
-                                }
-                            }
-                        }
-                    }
-
-                    bondReceiver.register(context, BluetoothDevice.ACTION_BOND_STATE_CHANGED, isExported = true)
-
-                    if(device.bondState == BluetoothDevice.BOND_NONE) device.createBond()
-                }
-            }
-            else true
-        }
-
-        suspend fun getUUids(): List<UUID> {
-            val cachedIds = device.uuids?.mapNotNull { it?.uuid } ?: emptyList()
-
-            return if(cachedIds.isNotEmpty()) {
-                cachedIds
-            }
-            else {
-                suspendCoroutine {
-                    val receiver = object: BroadcastReceiver() {
-                        override fun onReceive(context: Context?, intent: Intent?) {
-                            logcat { "Intent received with extras: ${intent?.extras?.toString()}" }
-
-                            context?.unregisterReceiver(this)
-
-                            if(intent == null) it.resume(emptyList())
-                            else {
-                                val action = BluetoothDevice.ACTION_UUID
-                                val clazz = ParcelUuid::class.java
-                                val extra = IntentCompat.getParcelableArrayExtra(intent, action, clazz)!!
-
-                                it.resume(extra.mapNotNull { if(it is ParcelUuid) it.uuid else null })
-                            }
-                        }
-                    }
-
-                    receiver.register(context, BluetoothDevice.ACTION_UUID, isExported = true)
-
-
-                    device.fetchUuidsWithSdp()
-                }
-            }
-        }
-
         return withContext(Dispatchers.IO) {
-            if(checkAndBond()) {
+            if(bond(context, device)) {
                 adapter.cancelDiscovery()
 
                 val uuids = listOf(OBEX_UUID)//getUUids()
@@ -238,6 +180,35 @@ object BluetoothConnector {
         }
     }
 
+    @SuppressLint("MissingPermission")
+    suspend fun bond(context: Context, device: BluetoothDevice): Boolean {
+        val manager = ContextCompat.getSystemService(context, BluetoothManager::class.java)!!
+        val adapter = manager.adapter!!
+
+        return if(device.bondState != BluetoothDevice.BOND_BONDED) {
+            suspendCoroutine {
+                val bondReceiver = object: BroadcastReceiver() {
+                    override fun onReceive(context: Context?, intent: Intent?) {
+                        logcat { "Intent received with extras: ${intent?.extras?.toString()}" }
+                        if(intent?.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
+                            val state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
+
+                            if(state != BluetoothDevice.BOND_BONDING) {
+                                context?.unregisterReceiver(this)
+                                it.resume(state == BluetoothDevice.BOND_BONDED)
+                            }
+                        }
+                    }
+                }
+
+                bondReceiver.register(context, BluetoothDevice.ACTION_BOND_STATE_CHANGED, isExported = true)
+
+                if(device.bondState == BluetoothDevice.BOND_NONE) device.createBond()
+            }
+        }
+        else true
+    }
+
     data class BtFile(
         val name: String,
         val mimeType: String,
@@ -264,9 +235,6 @@ object BluetoothConnector {
                             abort = true
                             break
                         }
-
-//                        logcat { "Last is \r ${last == '\r'} or \n ${last == '\n'} While value is ${}" }
-//                        if (last == '\r' && value.toChar() == '\n') break
 
                         body.add(value.toChar())
 

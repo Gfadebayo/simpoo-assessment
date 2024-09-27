@@ -15,23 +15,24 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             app:menu="@menu/bluetooth"
-            app:title="Bluetooth"/>
+            app:title="NFC"/>
 
         <Button
-            android:id="@+id/button_new"
+            android:id="@+id/button_host"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Create new socket connection" />
+            android:text="As Server/Host" />
 
         <Button
-            android:id="@+id/button_search"
+            android:id="@+id/button_client"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Search for devices" />
+            android:text="As Client" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Before connecting, the 2 devices must be paired. The client device must be the one to initiate the pairing. It is ideal for pairing to happen before any form of connection will take place. The first set of items displayed are the paired devices. New devices can be found using the button, then must be paired. If the device does not appear even after search. Pairing might have to be done from the settings page" />
+            android:text="Before attempting to connect, A message must be typed in order to ensure there is no delay" />
     </com.google.android.material.appbar.AppBarLayout>
 
     <FrameLayout

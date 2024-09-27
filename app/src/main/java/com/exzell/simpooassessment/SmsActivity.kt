@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import logcat.logcat
 
 class SmsActivity: AppCompatActivity(R.layout.activity_sms) {
 
@@ -96,6 +97,7 @@ class SmsActivity: AppCompatActivity(R.layout.activity_sms) {
             isVisible = true
 
             localRepo.getMessageBySenderAndType(contact.id, MessageType.SMS)
+                .onEach { logcat { it.joinToString(separator = "\n") } }
                 .map { it.map { message -> Chat(message._id, message.body, message.status.name, message.is_by_me) } }
                 .onEach { (adapter as ChatAdapter).submitList(it) }
                 .launchIn(lifecycleScope)

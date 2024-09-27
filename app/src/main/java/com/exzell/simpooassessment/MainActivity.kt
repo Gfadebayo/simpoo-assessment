@@ -29,7 +29,10 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                     Manifest.permission.BLUETOOTH_SCAN,
                     Manifest.permission.BLUETOOTH,
                     Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH_ADMIN
+                    Manifest.permission.BLUETOOTH_ADMIN,
+                    Manifest.permission.ACCESS_WIFI_STATE,
+                    Manifest.permission.CHANGE_WIFI_STATE,
+                    Manifest.permission.NEARBY_WIFI_DEVICES
                 )
             )
 
@@ -45,6 +48,14 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
             buttonBluetooth.setOnClickListener {
                 startActivity(Intent(this@MainActivity, BluetoothActivity::class.java))
+            }
+
+            buttonWifi.setOnClickListener {
+                startActivity(Intent(this@MainActivity, WifiDirectActivity::class.java))
+            }
+
+            buttonNfc.setOnClickListener {
+                startActivity(Intent(this@MainActivity, NfcActivity::class.java))
             }
         }
     }

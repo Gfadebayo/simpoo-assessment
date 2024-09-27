@@ -15,23 +15,19 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             app:menu="@menu/bluetooth"
-            app:title="Bluetooth"/>
+            app:title="WiFi Direct"/>
 
         <Button
             android:id="@+id/button_new"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Create new socket connection" />
+            android:text="Create QR Code" />
 
         <Button
-            android:id="@+id/button_search"
+            android:id="@+id/button_join"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Search for devices" />
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Before connecting, the 2 devices must be paired. The client device must be the one to initiate the pairing. It is ideal for pairing to happen before any form of connection will take place. The first set of items displayed are the paired devices. New devices can be found using the button, then must be paired. If the device does not appear even after search. Pairing might have to be done from the settings page" />
+            android:text="Join with QR Code" />
     </com.google.android.material.appbar.AppBarLayout>
 
     <FrameLayout
@@ -44,6 +40,7 @@
             android:id="@+id/recycler_contact"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:visibility="gone"
             android:background="?android:attr/colorBackground"
             tools:listitem="@layout/item_contact"
             app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"/>
@@ -53,5 +50,11 @@
             layout="@layout/partial_chat"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
+
+        <ImageView
+            android:id="@+id/image_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            tools:src="@tools:sample/avatars"/>
     </FrameLayout>
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

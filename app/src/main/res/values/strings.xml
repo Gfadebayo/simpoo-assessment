@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Simpoo Assessment</string>
+    <string name="nfc_service_description">Simpoo Assessment NFC Hce</string>
+    <string name="nfc_aid_description">Simpoo Assessment NFC AID</string>
 </resources>
