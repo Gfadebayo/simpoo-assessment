@@ -15,7 +15,7 @@ import javax.crypto.spec.IvParameterSpec
 
 object CryptographyManager {
 
-    private val APP_ID = "BuildConfig.APPLICATION_ID"
+    private val APP_ID: String = BuildConfig.LIBRARY_PACKAGE_NAME
     private val ANDROID_KEYSTORE = "AndroidKeyStore"
 
     private var secureID: String = ""
