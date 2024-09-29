@@ -2,6 +2,7 @@ package com.exzell.simpooassessment
 
 import android.Manifest
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,20 +23,28 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
 
             }.launch(
-                arrayOf(
-                    Manifest.permission.SEND_SMS,
-                    Manifest.permission.READ_SMS,
-                    Manifest.permission.RECEIVE_SMS,
-                    Manifest.permission.BLUETOOTH_SCAN,
-                    Manifest.permission.BLUETOOTH,
-                    Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH_ADMIN,
-                    Manifest.permission.ACCESS_WIFI_STATE,
-                    Manifest.permission.CHANGE_WIFI_STATE,
-                    Manifest.permission.NEARBY_WIFI_DEVICES,
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                )
+                buildList {
+                    add(Manifest.permission.SEND_SMS)
+                    add(Manifest.permission.READ_SMS)
+                    add(Manifest.permission.RECEIVE_SMS)
+
+                    add(Manifest.permission.BLUETOOTH_ADMIN)
+                    if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        add(Manifest.permission.BLUETOOTH_SCAN)
+                        add(Manifest.permission.BLUETOOTH_CONNECT)
+                        add(Manifest.permission.BLUETOOTH_ADVERTISE)
+                    }
+                    else {
+                        add(Manifest.permission.BLUETOOTH)
+                        add(Manifest.permission.ACCESS_FINE_LOCATION)
+//                    add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                        add(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                    }
+
+                    add(Manifest.permission.ACCESS_WIFI_STATE)
+                    add(Manifest.permission.CHANGE_WIFI_STATE)
+                    add(Manifest.permission.NEARBY_WIFI_DEVICES)
+                }.toTypedArray()
             )
 
             ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->

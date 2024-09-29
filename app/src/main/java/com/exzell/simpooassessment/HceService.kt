@@ -106,10 +106,12 @@ class HceService: HostApduService() {
         BigInteger.valueOf(NDEF_URI_BYTES.size.toLong()).toByteArray(), 2
     )
 
+    private var message = ""
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.also {
             if(it.hasExtra(NfcManager.EXTRA_MESSAGE)) {
-               val message =  it.getStringExtra(NfcManager.EXTRA_MESSAGE) ?: ""
+                message =  it.getStringExtra(NfcManager.EXTRA_MESSAGE) ?: ""
 
                 NDEF_URI = NdefMessage(createTextRecord("en", message, NDEF_ID))
 
@@ -126,18 +128,6 @@ class HceService: HostApduService() {
     override fun processCommandApdu(commandApdu: ByteArray?, extras: Bundle?): ByteArray {
         val intent = Intent(NfcManager.ACTION_RESPONSE)
 
-        if(commandApdu?.get(0) == 0xD2.toByte()) {
-            logcat { "Command apdu starts with d2, fetching content"}
-
-            val content = String(commandApdu.drop(1).toByteArray())
-
-            logcat { "Content is $content" }
-            intent.putExtra(NfcManager.EXTRA_RESPONSE, content)
-
-            sendBroadcast(intent)
-        }
-
-
 
         //
         // The following flow is based on Appendix E "Example of Mapping Version 2.0 Command Flow"
@@ -149,16 +139,29 @@ class HceService: HostApduService() {
         // First command: NDEF Tag Application select (Section 5.5.2 in NFC Forum spec)
         //
         if (APDU_SELECT.contentEquals(commandApdu)) {
-            sendBroadcast(intent.putExtra(NfcManager.EXTRA_STATUS, CommStatus.CONNECTED))
+            sendBroadcast(intent.putExtra(NfcManager.EXTRA_STATUS, CommStatus.CONNECTED.name))
             logcat { "APDU_SELECT triggered. Our Response: ${A_OKAY.toHexString()}" }
             return A_OKAY
         }
 
-        val contentBytes = "Hello from the other side".encodeToByteArray()
+        if(commandApdu?.get(0) == 0xD2.toByte()) {
+            logcat { "Command apdu starts with d2, fetching content"}
+
+            val content = String(commandApdu.drop(1).toByteArray())
+
+            logcat { "Content is $content" }
+            intent.putExtra(NfcManager.EXTRA_RESPONSE, content)
+
+            sendBroadcast(intent)
+        }
+
+        val contentBytes = message.encodeToByteArray()
         val apdu = ByteArray(contentBytes.size+1)
         apdu[0] = 0xD2.toByte()
         System.arraycopy(contentBytes, 0, apdu, 1, contentBytes.size)
-        return apdu
+        sendBroadcast(intent.putExtra(NfcManager.EXTRA_STATUS, CommStatus.SENT.name))
+
+        return apdu//NdefMessage(createTextRecord("en", message, byteArrayOf(0x12))).toByteArray()
 //        //
 //        // Second command: Capability Container select (Section 5.5.3 in NFC Forum spec)
 //        //

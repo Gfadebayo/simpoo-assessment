@@ -142,14 +142,15 @@ class BluetoothActivity: AppCompatActivity(R.layout.activity_bluetooth) {
 
     private fun requestPermission() {
         val permissions = buildList {
-            add(Manifest.permission.BLUETOOTH)
-
             add(Manifest.permission.BLUETOOTH_ADMIN)
 
             if (!isBelowS) {
                 add(Manifest.permission.BLUETOOTH_SCAN)
-
                 add(Manifest.permission.BLUETOOTH_CONNECT)
+                add(Manifest.permission.BLUETOOTH_ADVERTISE)
+            }
+            else {
+                add(Manifest.permission.BLUETOOTH)
             }
 
         }.toTypedArray()

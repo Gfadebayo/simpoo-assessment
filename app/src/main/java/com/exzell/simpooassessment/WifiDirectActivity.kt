@@ -14,11 +14,13 @@ import com.exzell.simpooassessment.ui.utils.viewBinding
 import com.google.android.material.snackbar.Snackbar
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import logcat.logcat
 
 class WifiDirectActivity: AppCompatActivity(R.layout.activity_wifi) {
@@ -72,10 +74,9 @@ class WifiDirectActivity: AppCompatActivity(R.layout.activity_wifi) {
 
             wifiManager.connectionFlow
                 .onEach { (connected, _) ->
-                    if (connected) {
-                        imageView.isVisible = false
-                        layoutChat.root.isVisible = true
-                    }
+                    textBanner.text = connected?.translate()
+                    imageView.isVisible = connected != WifiManager.Status.CONNECTED
+                    layoutChat.root.isVisible = connected == WifiManager.Status.CONNECTED
                 }
                 .launchIn(lifecycleScope)
 
@@ -86,12 +87,7 @@ class WifiDirectActivity: AppCompatActivity(R.layout.activity_wifi) {
                 .onEach { (layoutChat.recyclerChat.adapter as ChatAdapter).submitList(it) }
                 .launchIn(lifecycleScope)
 
-            if(!wifiManager.isSupported) {
-                textBanner.text = "WiFi is not supported by this device. Legacy WiFi will be used instead but in this case, this device cannot create a QR code, it can only join"
-                buttonNew.isEnabled = false
-            }
-
-            if(!wifiManager.isTurnedOn && wifiManager.isSupported) {
+            if(!wifiManager.isTurnedOn) {
                 Snackbar.make(root, "WiFi is not turned on, please turn it on to proceed", Snackbar.LENGTH_INDEFINITE).also {
                     it.setAction("Turn On") { _ ->
                         if(!wifiManager.turnOn(this@WifiDirectActivity)) {
@@ -107,9 +103,31 @@ class WifiDirectActivity: AppCompatActivity(R.layout.activity_wifi) {
         }
     }
 
+    private fun WifiManager.Status.translate(): String {
+        return when(this) {
+            WifiManager.Status.CREATING -> "Creating QR code"
+            WifiManager.Status.WAITING -> "Waiting for client to join"
+            WifiManager.Status.JOINING -> "Joining WiFi group"
+            WifiManager.Status.CONNECTED -> "Connected to WiFi direct device"
+            WifiManager.Status.DISCONNECTED -> "Disconnected"
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        binding.apply {
+            if(wifiManager.isTurnedOn && !wifiManager.isSupported) {
+                textBanner.text = "WiFi Direct is not supported by this device. Legacy WiFi will be used instead but in this case, this device cannot create a QR code, it can only join"
+                buttonNew.isEnabled = false
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         logcat { "Destroying this thing" }
-        wifiManager.stop()
+        runBlocking(Dispatchers.IO) {
+            wifiManager.stop()
+        }
     }
 }

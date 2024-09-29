@@ -8,6 +8,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.lifecycle.flowWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
 import com.exzell.simpooassessment.core.localRepo
 import com.exzell.simpooassessment.data.CommStatus
 import com.exzell.simpooassessment.data.NfcManager

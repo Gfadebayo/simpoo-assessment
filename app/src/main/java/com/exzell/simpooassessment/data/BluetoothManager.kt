@@ -84,7 +84,14 @@ class BluetoothManager(
 
             field = value
             if(value != null) {
-                scope.launch(Dispatchers.IO) { socket = value.accept() }
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        socket = value.accept()
+                    }
+                    catch (e: Exception) {
+                        logcat { e.stackTraceToString() }
+                    }
+                }
             }
         }
 
@@ -142,28 +149,19 @@ class BluetoothManager(
 
         discoverReceiver.register(context, BluetoothAdapter.ACTION_DISCOVERY_FINISHED, isExported = true)
 
-        val manager = ContextCompat.getSystemService(context, BluetoothManager::class.java)!!
-            val adapter = manager.adapter!!
-
-            if(!adapter.isDiscovering) {
-                adapter.startDiscovery()
-            }
+            if(!adapter.isDiscovering) adapter.startDiscovery()
 
         total.addAll(adapter.bondedDevices)
         trySend(total.toList())
 
             awaitClose {
                 logcat { "Cancelling search" }
-                try {
-                    adapter.cancelDiscovery()
-                    context.unregisterReceiver(bluetoothReceiver)
-                }
-                catch(e: Exception) {
-                    logcat { e.stackTraceToString() }
-                }
+
+                bluetoothReceiver.unregister(context)
+                discoverReceiver.unregister(context)
 
                 try {
-                    context.unregisterReceiver(discoverReceiver)
+                    adapter.cancelDiscovery()
                 }
                 catch(e: Exception) {
                     logcat { e.stackTraceToString() }

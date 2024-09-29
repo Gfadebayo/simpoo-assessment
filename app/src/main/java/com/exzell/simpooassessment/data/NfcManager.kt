@@ -13,6 +13,8 @@ import android.nfc.tech.IsoDep
 import android.nfc.tech.MifareClassic
 import android.nfc.tech.NdefFormatable
 import android.nfc.tech.NfcA
+import android.nfc.tech.NfcB
+import android.nfc.tech.TagTechnology
 import android.os.Build
 import android.provider.Settings
 import androidx.appcompat.app.AppCompatActivity
@@ -96,6 +98,8 @@ class NfcManager(private val context: Context, private val localRepo: LocalRepos
             updated_at = 0
         )
 
+        val id = localRepo.saveMessage(message)
+
         val sendReceiver = object: BroadcastReceiver() {
             override fun onReceive(contextt: Context?, intent: Intent?) {
                 val me = this
@@ -108,10 +112,10 @@ class NfcManager(private val context: Context, private val localRepo: LocalRepos
                                 _statusFlow.value = status
 
                                 if(status == CommStatus.SENT) {
-                                    localRepo.saveMessage(message.copy(status = SendStatus.SENT), update = true)
+                                    localRepo.updateStatus(SendStatus.SENT, id = id)
                                 }
                                 else if(status == CommStatus.SEND_FAIL) {
-                                    localRepo.saveMessage(message.copy(status = SendStatus.FAIL), update = true)
+                                    localRepo.updateStatus(SendStatus.FAIL, id = id)
                                 }
 
                                 if(status == CommStatus.DISCONNECTED) {
@@ -140,11 +144,9 @@ class NfcManager(private val context: Context, private val localRepo: LocalRepos
             }
         }
 
-        sendReceiver.register(context, ACTION_RESPONSE)
+        sendReceiver.register(context, ACTION_RESPONSE, isExported = true)
 
         context.startService(hceIntent)
-
-        localRepo.saveMessage(message)
     }
 
     fun sendAsReader(content: String, activity: AppCompatActivity): Flow<CommStatus> {
@@ -191,9 +193,22 @@ class NfcManager(private val context: Context, private val localRepo: LocalRepos
 
             if(tag == null) throw RuntimeException("Tag is null")
 
+            val message = Message(
+                _id = "",
+                who = tag.id.toHexString(),
+                is_by_me = true,
+                body = content,
+                type = MessageType.NFC,
+                status = SendStatus.SENDING,
+                created_at = 0,
+                updated_at = 0
+            )
+
+            val id = localRepo.saveMessage(message)
+
             emit(CommStatus.CONNECTING)
 
-            val isoDep = IsoDep.get(tag)
+            val isoDep = NfcA.get(tag)
 
             if (!isoDep.isConnected) isoDep.connect()
 
@@ -204,30 +219,27 @@ class NfcManager(private val context: Context, private val localRepo: LocalRepos
             emit(CommStatus.CONNECTED)
 
             isoDep.use {
-                val aidApdu = buildSelectApdu("D2760000850101")
-                logcat { "AID apdu: ${aidApdu.toHexString()}" }
-                val aidResponse = it.transceive(aidApdu)
-
-                if(!aidResponse.contentEquals(byteArrayOf(0x90.toByte(), 0x00))) {
-                    val res = it.transceive("D2760000850101".hexToByteArray())
-
-                    if(!res.contentEquals(byteArrayOf(0x90.toByte(), 0x00))) {
-                        throw RuntimeException("Could not select the Application AID")
-                    }
+                //The very first thing to do is to send an APDU to notify the device of the service
+                //subsequent APDU calls should be forwarded to
+                val idApdu = "D2760000850101".hexToByteArray()
+                val result = isoDep.transceive(idApdu)
+                logcat { "System select command returns: ${result.toHexString()}" }
+                if(!result.contentEquals("6E00".hexToByteArray())) {
+                    emit(CommStatus.SEND_FAIL)
+                    localRepo.updateStatus(SendStatus.FAIL, id)
+                    return@use
                 }
 
-                val message = Message(
-                    _id = "",
-                    who = tag.id.toHexString(),
-                    is_by_me = true,
-                    body = content,
-                    type = MessageType.NFC,
-                    status = SendStatus.SENDING,
-                    created_at = 0,
-                    updated_at = 0
-                )
+                //Next send an APDU to select the same AID to the system selected service
+                val aidApdu = buildSelectApdu("D2760000850101")
+                val aidResponse = it.transceive(aidApdu)
+                logcat { "AID apdu: ${aidResponse.toHexString()}" }
 
-                localRepo.saveMessage(message)
+                if(!aidResponse.contentEquals("9000".hexToByteArray())) {
+                    emit(CommStatus.SEND_FAIL)
+                    localRepo.updateStatus(SendStatus.FAIL, id)
+                    return@use
+                }
 
                 emit(CommStatus.SENDING)
 
@@ -238,7 +250,7 @@ class NfcManager(private val context: Context, private val localRepo: LocalRepos
 
                 val response = it.transceive(apdu)
 
-                localRepo.saveMessage(message.copy(status = SendStatus.SENT), true)
+                localRepo.updateStatus(SendStatus.SENT, id)
 
                 if(response[0] == 0xD2.toByte()) logcat { "Sent success" }
 
@@ -259,6 +271,8 @@ class NfcManager(private val context: Context, private val localRepo: LocalRepos
 
                 emit(CommStatus.SENT)
             }
+
+            emit(CommStatus.DISCONNECTED)
         }.flowOn(Dispatchers.IO)
             .onCompletion {
             logcat { "Disabling nfc watch" }

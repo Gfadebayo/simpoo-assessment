@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
@@ -32,6 +33,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import logcat.LogPriority
 import logcat.logcat
 import org.json.JSONObject
@@ -49,7 +51,7 @@ class WifiManager(
     private val scope: CoroutineScope
 ) {
     private companion object {
-        const val PORT = 13099
+        const val PORT = 13199
     }
 
     private val manager by lazy { ContextCompat.getSystemService(context, WifiP2pManager::class.java)!! }
@@ -57,13 +59,23 @@ class WifiManager(
     private val wifi by lazy { ContextCompat.getSystemService(context, WifiManager::class.java)!! }
 
     private var currentChannel: WifiP2pManager.Channel? = null
+        set(value) {
+            try {
+                logcat { "Attempting to close current channel: ${field}" }
+                field?.close()
+            }
+            catch(e: Exception) {
+
+            }
+            field = value
+        }
 
     private var currentGroup: WifiP2pGroup? = null
 
     private val _clientStateFlow = MutableStateFlow<List<WifiP2pDevice>>(emptyList())
     val clientFlow = _clientStateFlow.asStateFlow()
 
-    private val _connectionStateFlow = MutableStateFlow(false to "")
+    private val _connectionStateFlow = MutableStateFlow<Pair<Status?, String>>(null to "")
     val connectionFlow = _connectionStateFlow.asStateFlow()
 
     val isTurnedOn: Boolean
@@ -72,17 +84,47 @@ class WifiManager(
     val isConnected: Boolean
         get() = socket?.let { it.isConnected && !it.isClosed } ?: false
 
+    enum class Status { CREATING, WAITING, JOINING, CONNECTED, DISCONNECTED }
+
     val isSupported: Boolean
-        get() = wifi.isP2pSupported && context.packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT)
+        get() {
+            val hasConfig = try {
+                WifiP2pConfig.Builder()
+                    .setNetworkName("DIRECT-test")
+                    .setPassphrase("a wonderful world")
+                    .build()
+                true
+            }
+            catch (e: Throwable) {
+                logcat { e.stackTraceToString() }
+                false
+            }
+
+            return wifi.isP2pSupported
+                    && context.packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT)
+                    && hasConfig
+        }
 
     private var serverSocket: ServerSocket? = null
         set(value) {
+            try {
+                logcat { "Attempting to close current server socket: $field" }
+                field?.close()
+            }
+            catch (e: Exception) { }
+
             field = value
             scope.launch(Dispatchers.IO) {
-                if(value != null) {
-                    logcat { "Listening for incoming connections" }
-                    socket = value.accept()
-                    logcat { "Client socket found: $socket" }
+                try {
+                    if (value != null) {
+                        logcat { "Listening for incoming connections" }
+                        socket = value.accept()
+                        logcat { "Client socket found: $socket" }
+                        _connectionStateFlow.update { it.copy(first = Status.CONNECTED) }
+                    }
+                }
+                catch(e: Exception) {
+                    logcat { e.stackTraceToString() }
                 }
             }
         }
@@ -107,9 +149,11 @@ class WifiManager(
                         reuseAddress = true
                         bind(InetSocketAddress(PORT))
                     }
+                    _connectionStateFlow.update { it.copy(first = Status.WAITING) }
                 }
                 else if(!group.isGroupOwner && info.groupOwnerAddress != null) {
                     socket = Socket(info.groupOwnerAddress.hostAddress, PORT)
+                    _connectionStateFlow.update { it.copy(first = Status.CONNECTED) }
                 }
 
                 _clientStateFlow.update { (it + (group?.clientList ?: emptyList())).distinct() }
@@ -151,30 +195,35 @@ class WifiManager(
         clientReceiver.register(context, WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION, isExported = true)
     }
 
-    fun stop() {
-        scope.launch {
-            removeGroup()
+    //suspend because it is necessary the operations complete before exiting.
+    suspend fun stop() {
+        socket = null
 
-            currentChannel?.close()
+        serverSocket = null
 
-            clientReceiver.unregister(context)
+        clientReceiver.unregister(context)
 
-            socket?.close()
-            serverSocket?.close()
-        }
+//        withTimeout(1000) { removeGroup() }
+
+        currentChannel = null
     }
 
     suspend fun removeGroup(): Boolean {
         if(currentChannel == null) return true
 
+        logcat { "Sigh" }
+
         return suspendCoroutine {
+            logcat { "Sigh 1" }
             manager.removeGroup(currentChannel, object: WifiP2pManager.ActionListener {
                 override fun onSuccess() {
+                    logcat { "Sigh 3" }
                     currentGroup = null
                     it.resume(true)
                 }
 
                 override fun onFailure(reason: Int) {
+                    logcat { "Sigh 2" }
                     logcat(priority = LogPriority.ERROR) { "Remove group fail: $reason" }
                     it.resume(false)
                 }
@@ -186,7 +235,7 @@ class WifiManager(
         if(!wifi.isWifiEnabled) return null
 
         return withContext(Dispatchers.IO) {
-
+            _connectionStateFlow.update { it.copy(first = Status.CREATING) }
             removeGroup()
 
             val random = Random.nextBytes(10).toHexString()
@@ -202,13 +251,20 @@ class WifiManager(
                 manager.createGroup(currentChannel!!, config, object: WifiP2pManager.ActionListener {
                     override fun onSuccess() {
                         val content = """
-                    {
-                        "group_id": "$groupName",
-                        "password": "$password"
-                    }
-                """.trimIndent()
+                                    {
+                                        "group_id": "$groupName",
+                                        "password": "$password"
+                                    }
+                                """.trimIndent()
 
-                        it.resume(BarcodeEncoder().encodeBitmap(content, BarcodeFormat.QR_CODE, 400, 400))
+                        it.resume(
+                            BarcodeEncoder().encodeBitmap(
+                                content,
+                                BarcodeFormat.QR_CODE,
+                                400,
+                                400
+                            )
+                        )
                     }
 
                     override fun onFailure(reason: Int) {
@@ -223,6 +279,8 @@ class WifiManager(
     suspend fun connectUsingQr(content: String): Boolean {
         if(!wifi.isWifiEnabled) return false
 
+        removeGroup()
+
         val (groupId, password) = JSONObject(content).let {
             it.getString("group_id") to it.getString("password")
         }
@@ -233,6 +291,8 @@ class WifiManager(
             .setNetworkName(groupId)
             .setPassphrase(password)
             .build()
+
+        _connectionStateFlow.update { it.copy(first = Status.JOINING) }
 
         val connected = suspendCoroutine<Boolean> {
             manager.connect(currentChannel, config, object: WifiP2pManager.ActionListener {
@@ -245,8 +305,6 @@ class WifiManager(
                 }
             })
         }
-
-        _connectionStateFlow.value = connected to ""
 
         return true
     }
@@ -288,10 +346,17 @@ class WifiManager(
 
     private var socket: Socket? = null
         set(value) {
+            try {
+                if(field != null) _connectionStateFlow.update { it.copy(first = Status.DISCONNECTED) }
+                logcat { "Attempting to close current socket: $field" }
+                field?.close()
+            }
+            catch (e: Exception) { }
+
             field = value
             if(value != null) {
                 scope.launch(Dispatchers.IO) {
-                    _connectionStateFlow.value = true to String(value.inetAddress.address)
+                    _connectionStateFlow.update { it.copy(second = String(value.inetAddress.address)) }
                     listen(String(value.inetAddress.address), value, localRepo)
                 }
             }

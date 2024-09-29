@@ -59,7 +59,7 @@ FROM message
 WHERE type = :type;
 
 allMessagesForType:
-SELECT * FROM message WHERE type = :type ORDER BY created_at;
+SELECT * FROM message WHERE type = :type ORDER BY created_at DESC;
 
 allMessageBySenderWithType:
 SELECT * FROM message WHERE type = :type AND who = :who ORDER BY created_at;
