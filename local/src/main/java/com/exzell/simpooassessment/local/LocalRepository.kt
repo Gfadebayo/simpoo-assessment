@@ -37,15 +37,21 @@ class LocalRepository(context: Context, private val cryptoManager: CryptographyM
             .mapToList(Dispatchers.IO)
     }
 
-    fun getMessageBySenderAndType(sender: String, type: MessageType): Flow<List<Message>> {
+    fun getMessageBySenderAndType(sender: String, type: MessageType, decrypt: Boolean = true): Flow<List<Message>> {
         return messageQueries.allMessageBySenderWithType(type, sender)
             .asFlow()
             .mapToList(Dispatchers.IO)
-            .map { it.decrypt() }
+            .map { if(decrypt) it.decrypt() else it }
     }
 
-    suspend fun saveMessage(message: Message, update: Boolean = false) {
+    suspend fun updateStatus(status: SendStatus, id: String) {
         withContext(Dispatchers.IO) {
+            messageQueries.updateStatus(status, id)
+        }
+    }
+
+    suspend fun saveMessage(message: Message, update: Boolean = false): String {
+        return withContext(Dispatchers.IO) {
             Log.d("LocalRepo", "Saving: $message")
 
             val encBody = cryptoManager.encryptData(message.body)
@@ -57,15 +63,21 @@ class LocalRepository(context: Context, private val cryptoManager: CryptographyM
                     status = message.status,
                     body = encBody
                 )
-            } else {
+
+                message._id
+            }
+            else {
+                val id = UUID.randomUUID().toString()
                 messageQueries.insertMessage(
-                    _id = UUID.randomUUID().toString(),
+                    _id = id,
                     who = message.who,
                     body = encBody,
                     type = message.type,
                     status = message.status,
                     is_by_me = message.is_by_me
                 )
+
+                id
             }
         }
     }

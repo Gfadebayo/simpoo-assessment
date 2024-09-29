@@ -29,8 +29,6 @@ class WifiDirectActivity: AppCompatActivity(R.layout.activity_wifi) {
 
     private val wifiManager by lazy { WifiManager(applicationContext, localRepo, lifecycleScope) }
 
-    private val snackbar by lazy { Snackbar.make(binding.root, "", Snackbar.LENGTH_INDEFINITE) }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         scanLauncher = registerForActivityResult(ScanContract()) {
@@ -74,10 +72,6 @@ class WifiDirectActivity: AppCompatActivity(R.layout.activity_wifi) {
 
             wifiManager.connectionFlow
                 .onEach { (connected, _) ->
-                    val text  = if(connected) "Connected" else "Not connected"
-
-                    Toast.makeText(this@WifiDirectActivity, text, Toast.LENGTH_SHORT).show()
-
                     if (connected) {
                         imageView.isVisible = false
                         layoutChat.root.isVisible = true
@@ -91,11 +85,31 @@ class WifiDirectActivity: AppCompatActivity(R.layout.activity_wifi) {
                 .map { it.map { message -> Chat(message._id, message.body, message.status.name, message.is_by_me) } }
                 .onEach { (layoutChat.recyclerChat.adapter as ChatAdapter).submitList(it) }
                 .launchIn(lifecycleScope)
+
+            if(!wifiManager.isSupported) {
+                textBanner.text = "WiFi is not supported by this device. Legacy WiFi will be used instead but in this case, this device cannot create a QR code, it can only join"
+                buttonNew.isEnabled = false
+            }
+
+            if(!wifiManager.isTurnedOn && wifiManager.isSupported) {
+                Snackbar.make(root, "WiFi is not turned on, please turn it on to proceed", Snackbar.LENGTH_INDEFINITE).also {
+                    it.setAction("Turn On") { _ ->
+                        if(!wifiManager.turnOn(this@WifiDirectActivity)) {
+                            Toast.makeText(this@WifiDirectActivity, "WiFi cannot be turned on, it does not exist in settings", Toast.LENGTH_SHORT)
+                                .show()
+                        }
+
+                        it.dismiss()
+                    }
+                    it.show()
+                }
+            }
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        logcat { "Destroying this thing" }
         wifiManager.stop()
     }
 }

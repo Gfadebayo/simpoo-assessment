@@ -2,10 +2,11 @@
 
 package com.exzell.simpooassessment.data
 
-import android.bluetooth.BluetoothSocket
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pConfig
@@ -13,11 +14,11 @@ import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pGroup
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
+import android.os.Build
 import android.os.Looper
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
-import androidx.core.graphics.createBitmap
-import com.exzell.simpooassessment.data.BluetoothConnector.BtFile
 import com.exzell.simpooassessment.local.LocalRepository
 import com.exzell.simpooassessment.local.Message
 import com.exzell.simpooassessment.local.model.MessageType
@@ -26,20 +27,17 @@ import com.google.zxing.BarcodeFormat
 import com.journeyapps.barcodescanner.BarcodeEncoder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import logcat.LogPriority
 import logcat.logcat
 import org.json.JSONObject
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.SocketAddress
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -67,6 +65,15 @@ class WifiManager(
 
     private val _connectionStateFlow = MutableStateFlow(false to "")
     val connectionFlow = _connectionStateFlow.asStateFlow()
+
+    val isTurnedOn: Boolean
+        get() = wifi.isWifiEnabled
+
+    val isConnected: Boolean
+        get() = socket?.let { it.isConnected && !it.isClosed } ?: false
+
+    val isSupported: Boolean
+        get() = wifi.isP2pSupported && context.packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT)
 
     private var serverSocket: ServerSocket? = null
         set(value) {
@@ -96,7 +103,10 @@ class WifiManager(
                 } ?: getGroupInfo() ?: return@launch
 
                 if(group.isGroupOwner && serverSocket == null) {
-                    serverSocket = ServerSocket(PORT)
+                    serverSocket = ServerSocket().apply {
+                        reuseAddress = true
+                        bind(InetSocketAddress(PORT))
+                    }
                 }
                 else if(!group.isGroupOwner && info.groupOwnerAddress != null) {
                     socket = Socket(info.groupOwnerAddress.hostAddress, PORT)
@@ -104,6 +114,25 @@ class WifiManager(
 
                 _clientStateFlow.update { (it + (group?.clientList ?: emptyList())).distinct() }
             }
+        }
+    }
+
+    fun turnOn(activity: Activity): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // can also use `Settings.Panel.ACTION_WIFI` to enable/disable only WiFi
+                val panelIntent = Intent(Settings.Panel.ACTION_WIFI)
+                activity.startActivityForResult(panelIntent, 545)
+                true
+            } else {
+                // use previous solution, add appropriate permissions to AndroidManifest file (see answers above)
+                wifi.isWifiEnabled = true
+                true
+            }
+        }
+        catch(e: Exception) {
+            logcat { e.stackTraceToString() }
+            false
         }
     }
 

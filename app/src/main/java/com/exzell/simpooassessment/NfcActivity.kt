@@ -1,25 +1,24 @@
 package com.exzell.simpooassessment
 
 import android.content.Intent
-import android.nfc.NfcAdapter
-import android.nfc.Tag
-import android.nfc.tech.IsoDep
-import android.os.Build
+import android.graphics.Color
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.flowWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.exzell.simpooassessment.core.localRepo
+import com.exzell.simpooassessment.data.CommStatus
 import com.exzell.simpooassessment.data.NfcManager
 import com.exzell.simpooassessment.databinding.ActivityNfcBinding
 import com.exzell.simpooassessment.local.model.MessageType
 import com.exzell.simpooassessment.ui.utils.viewBinding
 import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import logcat.logcat
@@ -30,41 +29,29 @@ class NfcActivity: AppCompatActivity(R.layout.activity_nfc) {
 
     private val nfcManager by lazy { NfcManager(applicationContext, localRepo) }
 
-    private val snackbar by lazy { Snackbar.make(binding.root, "", Snackbar.LENGTH_INDEFINITE) }
+    private var job: Job? = null
+
+    private val bannerBgNormal = 0xA6A1A1
+
+    private val bannerBgError = 0xFF0303
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding.apply {
-
-            buttonHost.setOnClickListener {
-                val text = layoutChat.textInputMessage.editText?.text?.toString() ?: ""
-
-                if(text.isEmpty()) {
-                    snackbar.dismiss()
-                    Toast.makeText(this@NfcActivity, "A text must be entered first", Toast.LENGTH_SHORT)
-                        .show()
-                    return@setOnClickListener
+            buttonTag.setOnClickListener {
+                if(nfcManager.isSupportHce) {
+                    val text = layoutChat.textInputMessage.editText?.text?.toString() ?: ""
+                    beginAsTag(text)
                 }
-
-                lifecycleScope.launch {
-                    nfcManager.sendAsHost(text)
+                else {
+                    Toast.makeText(this@NfcActivity, "This device cannot function as an NFC tag", Toast.LENGTH_SHORT)
+                        .show()
                 }
             }
 
-            buttonClient.setOnClickListener {
+            buttonReader.setOnClickListener {
                 val text = layoutChat.textInputMessage.editText?.text?.toString() ?: ""
-
-                if(text.isEmpty()) {
-                    snackbar.dismiss()
-                    Toast.makeText(this@NfcActivity, "A text must be entered first", Toast.LENGTH_SHORT)
-                        .show()
-                    return@setOnClickListener
-                }
-
-                nfcManager.sendAsReader(text, this@NfcActivity)
-                    .flowWithLifecycle(lifecycle)
-                    .onEach { snackbar.setText(it.name).show() }
-                    .launchIn(lifecycleScope)
+                beginAsReader(text)
             }
 
             layoutChat.apply {
@@ -79,11 +66,75 @@ class NfcActivity: AppCompatActivity(R.layout.activity_nfc) {
                     (layoutChat.recyclerChat.adapter as ChatAdapter).submitList(it)
                 }
                 .launchIn(lifecycleScope)
+
+            nfcManager.statusFlow
+                .onEach { binding.textBanner.text = it?.translate() }
+                .launchIn(lifecycleScope)
+
+            if(!nfcManager.isSupported) {
+                textBanner.setBackgroundColor(Color.RED)
+                textBanner.text = "NFC is not supported on this device"
+            }
+
+            if(!nfcManager.isTurnedOn && nfcManager.isSupported) {
+                Snackbar.make(root, "NFC is not turned on, please turn it on to proceed", Snackbar.LENGTH_INDEFINITE).also {
+                    it.setAction("Turn On") { _ ->
+                        if(!nfcManager.turnOn(this@NfcActivity)) {
+                            Toast.makeText(this@NfcActivity, "NFC cannot be turned on, it does not exist in settings", Toast.LENGTH_SHORT)
+                                .show()
+                        }
+
+                        it.dismiss()
+                    }
+                    it.show()
+                }
+            }
         }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        logcat { "New intent received: ${intent}" }
+    private fun beginAsTag(text: String) {
+        binding.apply {
+            if(text.isEmpty()) {
+                textBanner.text = null
+                Toast.makeText(this@NfcActivity, "A text must be entered first", Toast.LENGTH_SHORT)
+                    .show()
+                return
+            }
+
+            lifecycleScope.launch {
+                nfcManager.sendAsTag(text)
+            }
+        }
+    }
+
+    private fun beginAsReader(text: String) {
+        binding.apply {
+            if(text.isEmpty()) {
+                textBanner.text = null
+                Toast.makeText(this@NfcActivity, "A text must be entered first", Toast.LENGTH_SHORT)
+                    .show()
+                return
+            }
+
+            job?.cancel()
+
+            job = nfcManager.sendAsReader(text, this@NfcActivity)
+                .flowWithLifecycle(lifecycle)
+                .onEach { textBanner.text = it.name }
+                .launchIn(lifecycleScope)
+        }
+    }
+
+    private fun CommStatus.translate(): String {
+        return when(this) {
+            CommStatus.WAITING -> "Waiting for Reader"
+            CommStatus.SEARCHING -> "Waiting for Tag"
+            CommStatus.CONNECTING -> "Connecting to Tag"
+            CommStatus.CONNECTED -> "Connected to Tag"
+            CommStatus.SENDING -> "Sending message"
+            CommStatus.SENT -> "Message delivered!"
+            CommStatus.DISCONNECTED -> "Disconnected"
+            CommStatus.SEND_FAIL -> "Unable to send message"
+        }
     }
 }

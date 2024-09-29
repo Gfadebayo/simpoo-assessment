@@ -7,6 +7,7 @@ import android.nfc.NdefMessage
 import android.nfc.NdefRecord
 import android.nfc.cardemulation.HostApduService
 import android.os.Bundle
+import com.exzell.simpooassessment.data.CommStatus
 import com.exzell.simpooassessment.data.NfcManager
 import logcat.logcat
 import java.io.UnsupportedEncodingException
@@ -123,14 +124,15 @@ class HceService: HostApduService() {
     }
 
     override fun processCommandApdu(commandApdu: ByteArray?, extras: Bundle?): ByteArray {
+        val intent = Intent(NfcManager.ACTION_RESPONSE)
+
         if(commandApdu?.get(0) == 0xD2.toByte()) {
             logcat { "Command apdu starts with d2, fetching content"}
 
             val content = String(commandApdu.drop(1).toByteArray())
 
             logcat { "Content is $content" }
-            val intent = Intent(NfcManager.ACTION_RESPONSE)
-                .putExtra(NfcManager.EXTRA_RESPONSE, content)
+            intent.putExtra(NfcManager.EXTRA_RESPONSE, content)
 
             sendBroadcast(intent)
         }
@@ -147,11 +149,12 @@ class HceService: HostApduService() {
         // First command: NDEF Tag Application select (Section 5.5.2 in NFC Forum spec)
         //
         if (APDU_SELECT.contentEquals(commandApdu)) {
+            sendBroadcast(intent.putExtra(NfcManager.EXTRA_STATUS, CommStatus.CONNECTED))
             logcat { "APDU_SELECT triggered. Our Response: ${A_OKAY.toHexString()}" }
             return A_OKAY
         }
 
-        val contentBytes = "Hello frommthe other side".encodeToByteArray()
+        val contentBytes = "Hello from the other side".encodeToByteArray()
         val apdu = ByteArray(contentBytes.size+1)
         apdu[0] = 0xD2.toByte()
         System.arraycopy(contentBytes, 0, apdu, 1, contentBytes.size)
@@ -236,6 +239,10 @@ class HceService: HostApduService() {
 //    }
 
     override fun onDeactivated(reason: Int) {
+        val intent = Intent(NfcManager.ACTION_RESPONSE)
+            .putExtra(NfcManager.EXTRA_STATUS, CommStatus.DISCONNECTED.name)
+
+        sendBroadcast(intent)
         logcat { "Hce deactivated with reason: $reason" }
     }
 }

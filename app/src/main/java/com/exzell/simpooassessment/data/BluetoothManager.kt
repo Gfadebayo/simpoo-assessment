@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -12,7 +13,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.ParcelUuid
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
@@ -20,24 +20,91 @@ import com.exzell.simpooassessment.local.LocalRepository
 import com.exzell.simpooassessment.local.Message
 import com.exzell.simpooassessment.local.model.MessageType
 import com.exzell.simpooassessment.local.model.SendStatus
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import logcat.LogPriority
 import logcat.logcat
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
-object BluetoothConnector {
-    val ERROR_SEARCH_COMPLETE = "search complete"
+@SuppressLint("MissingPermission")
+class BluetoothManager(
+    private val context: Context,
+    private val localRepo: LocalRepository,
+    private val scope: CoroutineScope
+) {
+    companion object {
+        val ERROR_SEARCH_COMPLETE = "search complete"
+        private val OBEX_UUID = UUID.fromString("d51e2d9f-4846-4963-b3cc-ae6d7b0bf8b5")
+    }
 
-    @SuppressLint("MissingPermission")
-    fun searchForDevices(context: Context): Flow<List<BluetoothDevice>> = callbackFlow {
+    val adapter by lazy {
+        val manager = ContextCompat.getSystemService(context, BluetoothManager::class.java)!!
+        manager.adapter
+    }
+
+    val isDiscoverable: Boolean
+        get() = adapter.scanMode == BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE
+
+    private val _connectFlow = MutableSharedFlow<Boolean>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val connectFlow = _connectFlow.asSharedFlow()
+
+    private var socket: BluetoothSocket? = null
+        set(value) {
+            try {
+                _connectFlow.tryEmit(false)
+                logcat(priority = LogPriority.ERROR) { "Attempting to close previous socket: ${field}" }
+                field?.close()
+            }
+            catch(e: Exception) { }
+
+            field = value
+            if(value != null) {
+                _connectFlow.tryEmit(true)
+                scope.launch { listen(value) }
+            }
+        }
+
+    private var serverSocket: BluetoothServerSocket? = null
+        set(value) {
+            try {
+                logcat(LogPriority.ERROR) { "Attempting to close previously created server socket: ${field}" }
+                field?.close()
+            }
+            catch(e: Exception) { }
+
+            field = value
+            if(value != null) {
+                scope.launch(Dispatchers.IO) { socket = value.accept() }
+            }
+        }
+
+    private val disconnectReceiver = object: BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            intent?.also {
+                if(it.action == BluetoothDevice.ACTION_ACL_DISCONNECTED) {
+                    _connectFlow.tryEmit(false)
+                    serverSocket = null
+                    socket = null
+                }
+            }
+        }
+    }
+
+    init {
+        disconnectReceiver.register(context, BluetoothDevice.ACTION_ACL_DISCONNECTED, true)
+    }
+
+    fun searchForDevices(): Flow<List<BluetoothDevice>> = callbackFlow {
             val total = mutableSetOf<BluetoothDevice>()
 
             if(!context.hasPermission(
@@ -104,59 +171,14 @@ object BluetoothConnector {
             }
         }
 
-    private val OBEX_UUID = UUID.fromString("d51e2d9f-4846-4963-b3cc-ae6d7b0bf8b5")
+     fun connect(deviceID: String) {
+         adapter.cancelDiscovery()
 
-    suspend fun connect(context: Context, deviceID: String): BluetoothSocket? {
-        val manager = ContextCompat.getSystemService(context, BluetoothManager::class.java)!!
-        val adapter = manager.adapter!!
+         val device = adapter.getRemoteDevice(deviceID)
 
-        val device = adapter.getRemoteDevice(deviceID)
-
-        return connect(context, device)
-    }
-
-    suspend fun createSocket(context: Context): Pair<String, BluetoothSocket> {
-        return withContext(Dispatchers.IO) {
-            val deviceResult = async {
-                suspendCoroutine<BluetoothDevice> { cont ->
-                    val connectedReceiver = object: BroadcastReceiver() {
-                        override fun onReceive(context: Context?, intent: Intent?) {
-                            val device = IntentCompat.getParcelableExtra(intent!!, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-
-                            logcat { "Bluetooth device connected: ${device}" }
-                            this.unregister(context!!)
-                            cont.resume(device!!)
-                        }
-                    }
-
-                    connectedReceiver.register(context, BluetoothDevice.ACTION_ACL_CONNECTED, isExported = true)
-                }
-            }
-
-            val socketResult = async {
-                val manager = ContextCompat.getSystemService(context, BluetoothManager::class.java)!!
-                val adapter = manager.adapter!!
-
-                val server = adapter.listenUsingInsecureRfcommWithServiceRecord("Simpoo", OBEX_UUID)
-
-                server.accept()/*.also { server.close() }*/
-            }
-
-            deviceResult.await().address to socketResult.await()
-        }
-    }
-
-    suspend fun connect(context: Context, device: BluetoothDevice): BluetoothSocket? {
-        val manager = ContextCompat.getSystemService(context, BluetoothManager::class.java)!!
-        val adapter = manager.adapter!!
-
-        return withContext(Dispatchers.IO) {
+        scope.launch {
             if(bond(context, device)) {
-                adapter.cancelDiscovery()
-
                 val uuids = listOf(OBEX_UUID)//getUUids()
-
-                var bSocket: BluetoothSocket? = null
 
                 logcat { "UUIDS\n${uuids.joinToString(separator = "\n")}" }
 
@@ -165,7 +187,7 @@ object BluetoothConnector {
 
                     try {
                         socket.connect()
-                        bSocket = socket
+                        this@BluetoothManager.socket = socket
                         break
                     }
                     catch(e: Exception) {
@@ -173,50 +195,80 @@ object BluetoothConnector {
                         continue
                     }
                 }
-
-                bSocket
             }
-            else null
         }
     }
 
-    @SuppressLint("MissingPermission")
-    suspend fun bond(context: Context, device: BluetoothDevice): Boolean {
-        val manager = ContextCompat.getSystemService(context, BluetoothManager::class.java)!!
-        val adapter = manager.adapter!!
+    fun createSocket() {
+        scope.launch {
+            adapter.cancelDiscovery()
 
-        return if(device.bondState != BluetoothDevice.BOND_BONDED) {
-            suspendCoroutine {
-                val bondReceiver = object: BroadcastReceiver() {
-                    override fun onReceive(context: Context?, intent: Intent?) {
-                        logcat { "Intent received with extras: ${intent?.extras?.toString()}" }
-                        if(intent?.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
-                            val state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
+            serverSocket = adapter.listenUsingInsecureRfcommWithServiceRecord("Simpoo", OBEX_UUID)
+        }
+    }
 
-                            if(state != BluetoothDevice.BOND_BONDING) {
-                                context?.unregisterReceiver(this)
-                                it.resume(state == BluetoothDevice.BOND_BONDED)
-                            }
+    fun send(content: String) {
+        scope.launch {
+            socket?.apply {
+                if(!isConnected) {
+                    _connectFlow.emit(false)
+                    return@launch
+                }
+
+                if(content.isBlank()) return@launch
+
+                val id = remoteDevice.address
+
+                val message = Message(
+                    _id = "",
+                    who = id,
+                    is_by_me = true,
+                    body = content,
+                    type = MessageType.BT,
+                    status = SendStatus.SENDING,
+                    created_at = 0,
+                    updated_at = 0
+                )
+
+                val messageId = localRepo.saveMessage(message)
+
+                logcat { "inside sendBytes thing and socket state is ${isConnected}" }
+
+                outputStream.also {
+                    try {
+                        val bytes = content.encodeToByteArray()
+
+                        for ((offset, b) in bytes.withIndex()) {
+                            it.write(b.toInt())
+//                        emit(offset)
                         }
+
+//                    emit(file.bytes.size)
+
+                        it.write("\r\n".encodeToByteArray())
+                        it.flush()
+                    }
+                    catch(e: Exception) {
+                        localRepo.updateStatus(SendStatus.SENT, messageId)
                     }
                 }
 
-                bondReceiver.register(context, BluetoothDevice.ACTION_BOND_STATE_CHANGED, isExported = true)
-
-                if(device.bondState == BluetoothDevice.BOND_NONE) device.createBond()
+                localRepo.updateStatus(SendStatus.SENT, messageId)
             }
         }
-        else true
     }
 
-    data class BtFile(
-        val name: String,
-        val mimeType: String,
-        val bytes: ByteArray
-    )
+    fun close() {
+        socket = null
+        serverSocket = null
 
-    suspend fun listen(id: String, socket: BluetoothSocket, localRepo: LocalRepository) {
+        disconnectReceiver.unregister(context)
+    }
+
+    private suspend fun listen(socket: BluetoothSocket) {
         withContext(Dispatchers.IO) {
+            val id = socket.remoteDevice.address
+
             try {
                 while(socket.isConnected) {
                     val body = mutableListOf<Char>()
@@ -265,30 +317,32 @@ object BluetoothConnector {
         }
     }
 
-    suspend fun sendBytes(socket: BluetoothSocket, file: BtFile, close: Boolean = false): Flow<Int> {
-        return flow {
-            logcat { "inside sendBytes thing and socket state is ${socket.isConnected}" }
+    private suspend fun bond(context: Context, device: BluetoothDevice): Boolean {
+        val manager = ContextCompat.getSystemService(context, BluetoothManager::class.java)!!
+        val adapter = manager.adapter!!
 
-            socket.outputStream.also {
-                for((offset, b) in file.bytes.withIndex()) {
-                    it.write(b.toInt())
-                    emit(offset)
+        return if(device.bondState != BluetoothDevice.BOND_BONDED) {
+            suspendCoroutine {
+                val bondReceiver = object: BroadcastReceiver() {
+                    override fun onReceive(context: Context?, intent: Intent?) {
+                        logcat { "Intent received with extras: ${intent?.extras?.toString()}" }
+                        if(intent?.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
+                            val state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
+
+                            if(state != BluetoothDevice.BOND_BONDING) {
+                                context?.unregisterReceiver(this)
+                                it.resume(state == BluetoothDevice.BOND_BONDED)
+                            }
+                        }
+                    }
                 }
 
-                emit(file.bytes.size)
+                bondReceiver.register(context, BluetoothDevice.ACTION_BOND_STATE_CHANGED, isExported = true)
 
-                it.write("\r\n".encodeToByteArray())
-                it.flush()
+                if(device.bondState == BluetoothDevice.BOND_NONE) device.createBond()
             }
-
-//            if(close) {
-//                try {
-//                    socket.close()
-//                } catch (e: Exception) {
-//                    logcat { e.stackTraceToString() }
-//                }
-//            }
-        }.flowOn(Dispatchers.IO)
+        }
+        else true
     }
 }
 

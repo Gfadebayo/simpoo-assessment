@@ -23,8 +23,10 @@ import androidx.recyclerview.widget.RecyclerView
 import com.exzell.simpooassessment.core.localRepo
 import com.exzell.simpooassessment.databinding.ActivitySmsBinding
 import com.exzell.simpooassessment.databinding.ItemChatBinding
+import com.exzell.simpooassessment.local.CryptographyManager
 import com.exzell.simpooassessment.local.model.MessageType
 import com.exzell.simpooassessment.ui.utils.viewBinding
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
@@ -34,6 +36,8 @@ import logcat.logcat
 class SmsActivity: AppCompatActivity(R.layout.activity_sms) {
 
     private val binding by viewBinding { ActivitySmsBinding.bind(it) }
+
+    private val cryptoManager = CryptographyManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,7 +74,19 @@ class SmsActivity: AppCompatActivity(R.layout.activity_sms) {
                 onClick = { showChat(it) }
             }
 
-            recyclerChat.adapter = ChatAdapter()
+            recyclerChat.adapter = ChatAdapter().apply {
+                onClick = {
+                    val index = currentList.indexOf(it)
+                    val newBody = if(cryptoManager.checkIsEncrypted(it.body)) {
+                        String(cryptoManager.decryptData(it.body))
+                    }
+                    else cryptoManager.encryptData(it.body)
+
+                    val newChat = it.copy(body = newBody)
+                    val newList = currentList.toMutableList().also { it.set(index, newChat) }
+                    submitList(newList)
+                }
+            }
 
             localRepo.selectSenderForType(MessageType.SMS)
                 .map { list -> list.map { Contact(it, it) } }
@@ -92,11 +108,14 @@ class SmsActivity: AppCompatActivity(R.layout.activity_sms) {
         }
     }
 
+    private var chatJob: Job? = null
+
     private fun showChat(contact: Contact) {
         binding.recyclerChat.apply {
             isVisible = true
 
-            localRepo.getMessageBySenderAndType(contact.id, MessageType.SMS)
+            chatJob?.cancel()
+            chatJob = localRepo.getMessageBySenderAndType(contact.id, MessageType.SMS, decrypt = false)
                 .onEach { logcat { it.joinToString(separator = "\n") } }
                 .map { it.map { message -> Chat(message._id, message.body, message.status.name, message.is_by_me) } }
                 .onEach { (adapter as ChatAdapter).submitList(it) }
@@ -125,6 +144,8 @@ class ChatAdapter: ListAdapter<Chat, ChatAdapter.ViewHolder>(DIFF_UTIL) {
         }
     }
 
+    var onClick: (Chat) -> Unit = {}
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
         return LayoutInflater.from(parent.context).inflate(R.layout.item_chat, parent, false).run {
             ViewHolder(this)
@@ -145,7 +166,9 @@ class ChatAdapter: ListAdapter<Chat, ChatAdapter.ViewHolder>(DIFF_UTIL) {
 
     inner class ViewHolder(view: View): RecyclerView.ViewHolder(view) {
         val binding = ItemChatBinding.bind(view).apply {
-
+            root.setOnClickListener {
+                onClick(currentList[bindingAdapterPosition])
+            }
         }
     }
 }

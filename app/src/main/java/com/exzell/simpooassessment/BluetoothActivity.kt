@@ -19,36 +19,126 @@ import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.exzell.simpooassessment.core.localRepo
 import com.exzell.simpooassessment.data.BluetoothConnect
-import com.exzell.simpooassessment.data.BluetoothConnector
+import com.exzell.simpooassessment.data.BluetoothManager
 import com.exzell.simpooassessment.data.isBelowS
 import com.exzell.simpooassessment.data.isBluetoothOn
 import com.exzell.simpooassessment.databinding.ActivityBluetoothBinding
 import com.exzell.simpooassessment.databinding.ItemContactBinding
-import com.exzell.simpooassessment.local.Message
 import com.exzell.simpooassessment.local.model.MessageType
-import com.exzell.simpooassessment.local.model.SendStatus
 import com.exzell.simpooassessment.ui.utils.viewBinding
-import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.launch
-import logcat.logcat
+import kotlinx.coroutines.flow.onStart
 
 class BluetoothActivity: AppCompatActivity(R.layout.activity_bluetooth) {
-    private val TIMEOUT = 30
+    private val TIMEOUT = 3600
 
     private val binding by viewBinding { ActivityBluetoothBinding.bind(it) }
 
-    private val connector = BluetoothConnector
+    private val connector by lazy { BluetoothManager(applicationContext, localRepo, lifecycleScope) }
 
     private lateinit var bluetoothOnLauncher: ActivityResultLauncher<Intent>
 
     private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>>
 
     private lateinit var discoverLauncher: ActivityResultLauncher<Intent>
+
+    private var searchJob: Job? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setSupportActionBar(binding.toolbar)
+        setupBtLaunchers()
+        binding.apply {
+            buttonNew.setOnClickListener {
+                recyclerContact.isVisible = false
+                textBanner.text = "Creating and Listening for Bluetooth devices"
+
+                connector.createSocket()
+            }
+
+            buttonSearch.setOnClickListener {
+                recyclerContact.isVisible = true
+                beginSearch()
+            }
+
+            layoutChat.buttonSend.setOnClickListener {
+                val text = layoutChat.textInputMessage.editText?.text?.toString() ?: ""
+                connector.send(text)
+            }
+
+            recyclerContact.adapter = ContactAdapter().apply {
+                onClick = {
+                    textBanner.text = "Connecting to Bluetooth device"
+                    connector.connect(it.id)
+                }
+            }
+
+            layoutChat.recyclerChat.adapter = ChatAdapter()
+
+            localRepo.getMessagesForType(MessageType.BT)
+                .map { it.map { message -> Chat(message._id, message.body, message.status.name, message.is_by_me) } }
+                .onEach { (layoutChat.recyclerChat.adapter as ChatAdapter).submitList(it) }
+                .launchIn(lifecycleScope)
+
+            connector.connectFlow
+                .onEach {
+                    layoutChat.root.isVisible = it
+                    textBanner.text = if(it) "Connected to BT Device" else "Disconnected from BT Device"
+                }
+                .launchIn(lifecycleScope)
+
+            recyclerContact.isVisible = false
+            layoutChat.root.isVisible = false
+
+            requestPermission()
+        }
+    }
+
+    private fun setupBtLaunchers() {
+        permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            if(it.all { (_, value) -> value }) makeDiscover()
+            else {
+                Toast.makeText(this@BluetoothActivity, "Permission required", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        bluetoothOnLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            if (it.resultCode == Activity.RESULT_OK) makeDiscover()
+            else if (it.resultCode == Activity.RESULT_CANCELED) {
+                Toast.makeText(this@BluetoothActivity, "Bluetooth denied", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        discoverLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            if (it.resultCode == Activity.RESULT_OK || it.resultCode == TIMEOUT) beginSearch()
+            else if (it.resultCode == Activity.RESULT_CANCELED) {
+                Toast.makeText(this@BluetoothActivity, "Discovery denied", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun beginSearch() {
+        searchJob?.cancel()
+
+        if(!binding.recyclerContact.isVisible) return
+
+        searchJob = connector.searchForDevices()
+            .onStart { binding.textBanner.text = "Searching for Bluetooth devices" }
+            .catch {
+                if(it.message == BluetoothManager.ERROR_SEARCH_COMPLETE) {
+                    binding.textBanner.text = "Bluetooth device search complete"
+                }
+            }
+            .map { it.map { bt -> Contact(bt.address, bt.name) } }
+            .onEach {
+                (binding.recyclerContact.adapter as ContactAdapter).submitList(it)
+            }
+            .launchIn(lifecycleScope)
+    }
 
     private fun requestPermission() {
         val permissions = buildList {
@@ -67,19 +157,6 @@ class BluetoothActivity: AppCompatActivity(R.layout.activity_bluetooth) {
         permissionLauncher.launch(permissions)
     }
 
-    private var searchJob: Job? = null
-
-    private fun beginSearch() {
-        searchJob?.cancel()
-
-        searchJob = BluetoothConnector.searchForDevices(applicationContext)
-            .map { it.map { bt -> Contact(bt.address, bt.name) } }
-            .onEach {
-                (binding.recyclerContact.adapter as ContactAdapter).submitList(it)
-            }
-            .launchIn(lifecycleScope)
-    }
-
     private fun makeDiscover() {
         fun turnOnBluetooth() {
             bluetoothOnLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
@@ -94,118 +171,20 @@ class BluetoothActivity: AppCompatActivity(R.layout.activity_bluetooth) {
             }
             BluetoothConnect.OFF -> turnOnBluetooth()
             BluetoothConnect.ON -> {
-                val discoverableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
-                discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, TIMEOUT)
+                if(!connector.isDiscoverable) {
+                    val discoverableIntent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+                    discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, TIMEOUT)
 
-                discoverLauncher.launch(discoverableIntent)
+                    discoverLauncher.launch(discoverableIntent)
+                }
+                else beginSearch()
             }
         }
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setSupportActionBar(binding.toolbar)
-        binding.apply {
-            val contract = ActivityResultContracts.RequestMultiplePermissions()
-            permissionLauncher = registerForActivityResult(contract) {
-                if(it.all { (_, value) -> value }) makeDiscover()
-            }
-
-            bluetoothOnLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-                if (it.resultCode == Activity.RESULT_OK) makeDiscover()
-                else if (it.resultCode == Activity.RESULT_CANCELED) {
-                    Toast.makeText(this@BluetoothActivity, "Bluetooth denied", Toast.LENGTH_SHORT).show()
-                }
-            }
-
-            discoverLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-                if (it.resultCode == Activity.RESULT_OK || it.resultCode == TIMEOUT) beginSearch()
-                else if (it.resultCode == Activity.RESULT_CANCELED) {
-                    Toast.makeText(this@BluetoothActivity, "Bluetooth denied", Toast.LENGTH_SHORT).show()
-                }
-            }
-
-            buttonNew.setOnClickListener {
-                lifecycleScope.launch {
-                    logcat { "Listening for incoming connections" }
-                    showChat(null)
-                }
-            }
-
-            buttonSearch.setOnClickListener {
-                makeDiscover()
-            }
-
-            recyclerContact.adapter = ContactAdapter().apply {
-                onClick = {
-                    showChat(it)
-                }
-            }
-
-            layoutChat.recyclerChat.adapter = ChatAdapter()
-
-            localRepo.getMessagesForType(MessageType.BT)
-                .map { it.map { message -> Chat(message._id, message.body, message.status.name, message.is_by_me) } }
-                .onEach { (layoutChat.recyclerChat.adapter as ChatAdapter).submitList(it) }
-                .launchIn(lifecycleScope)
-
-            recyclerContact.isVisible = true
-            layoutChat.root.isVisible = false
-
-            snackBar.setText("Showing currently paired devices").show()
-
-            requestPermission()
-        }
-    }
-
-    private val snackBar by lazy { Snackbar.make(binding.root, "", Snackbar.LENGTH_INDEFINITE) }
-
-    private fun showChat(contact: Contact?) {
-        binding.layoutChat.apply {
-            lifecycleScope.launch {
-                val text = if(contact == null) "Creating a new socket connection" else "Connecting to ${contact.id}"
-
-                snackBar.setText(text).show()
-
-                val (id, socket) = if(contact!= null) contact.id to connector.connect(applicationContext, contact.id)
-                else connector.createSocket(applicationContext)
-
-                val statusText = if(socket == null) "Failed to connect to socket" else "Connected"
-                Toast.makeText(this@BluetoothActivity, statusText, Toast.LENGTH_SHORT).show()
-
-                root.isVisible = socket != null
-
-                buttonSend.setOnClickListener {
-                    lifecycleScope.launch {
-                        val text = textInputMessage.editText?.text?.toString() ?: return@launch
-                        val file = BluetoothConnector.BtFile(
-                            "Simple file",
-                            "text/plain",
-                            text.encodeToByteArray()
-                        )
-
-                        connector.sendBytes(socket!!, file).collect()
-
-                        val message = Message(
-                            _id = "",
-                            who = id,
-                            is_by_me = true,
-                            body = text,
-                            type = MessageType.BT,
-                            status = SendStatus.SENT,
-                            created_at = 0,
-                            updated_at = 0
-                        )
-
-                        localRepo.saveMessage(message)
-                    }
-                }
-
-                lifecycleScope.launch {
-                    if(socket != null) connector.listen(id, socket, localRepo)
-                }
-            }
-        }
+    override fun onDestroy() {
+        super.onDestroy()
+        connector.close()
     }
 }
 

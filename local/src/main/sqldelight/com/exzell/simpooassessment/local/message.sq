@@ -42,8 +42,15 @@ update:
 UPDATE
 message
 SET
-who = :who, type = :type, status = :status, body = :body
+type = :type, status = :status, body = :body
 WHERE type = :type AND who = :who;
+
+updateStatus:
+UPDATE
+message
+SET
+status = :status
+WHERE _id = :id;
 
 senderForType:
 SELECT DISTINCT

@@ -17,17 +17,29 @@
             app:menu="@menu/bluetooth"
             app:title="NFC"/>
 
-        <Button
-            android:id="@+id/button_host"
+        <TextView
+            android:id="@+id/text_banner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="As Server/Host" />
+            android:paddingVertical="12dp"
+            android:background="#A6A1A1"
+            android:textColor="@color/white"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:gravity="center_horizontal"
+            tools:text="Ready or not"/>
 
         <Button
-            android:id="@+id/button_client"
+            android:id="@+id/button_tag"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="As Client" />
+            android:text="As Tag" />
+
+        <Button
+            android:id="@+id/button_reader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="As Reader" />
 
         <TextView
             android:layout_width="match_parent"

@@ -2,12 +2,19 @@
 
 package com.exzell.simpooassessment.data
 
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.IsoDep
+import android.nfc.tech.MifareClassic
+import android.nfc.tech.NdefFormatable
+import android.nfc.tech.NfcA
+import android.os.Build
+import android.provider.Settings
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.PendingIntentCompat
 import androidx.core.content.ContextCompat
@@ -21,17 +28,21 @@ import com.exzell.simpooassessment.local.model.MessageType
 import com.exzell.simpooassessment.local.model.SendStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.runBlocking
 import logcat.logcat
+import java.lang.Exception
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
 class NfcManager(private val context: Context, private val localRepo: LocalRepository) {
     companion object {
         val ACTION_RESPONSE = "${BuildConfig.APPLICATION_ID}.NfcManager_ACTION_RECEIVED"
+        val EXTRA_STATUS = "${BuildConfig.APPLICATION_ID}.NfcManager_EXTRA_STATUS"
         val EXTRA_RESPONSE = "${BuildConfig.APPLICATION_ID}.NfcManager_EXTRA_RESPONSE"
         val EXTRA_MESSAGE = "${BuildConfig.APPLICATION_ID}.NfcManager_EXTRA_MESSAGE"
     }
@@ -42,38 +53,37 @@ class NfcManager(private val context: Context, private val localRepo: LocalRepos
         logcat { "NfcAdapter is $nfcAdapter" }
     }
 
-    suspend fun sendAsHost(content: String) {
-        val sendReceiver = object: BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                ContextCompat.getMainExecutor(context!!).run {
-                    runBlocking {
-                        if(intent?.action == ACTION_RESPONSE) {
-                            val response = intent.getStringExtra(EXTRA_RESPONSE) ?: return@runBlocking
+    val isSupported: Boolean
+        get() = nfcAdapter != null
 
-                            val message = Message(
-                                _id = "",
-                                who = "xyz",
-                                is_by_me = false,
-                                body = response,
-                                type = MessageType.NFC,
-                                status = SendStatus.SENT,
-                                created_at = 0,
-                                updated_at = 0
-                            )
+    val isTurnedOn: Boolean
+        get() = nfcAdapter != null && nfcAdapter.isEnabled
 
-                            localRepo.saveMessage(message)
-                        }
-                    }
-                }
-            }
+    val isSupportHce: Boolean
+        get() = context.packageManager.hasSystemFeature(PackageManager.FEATURE_NFC_HOST_CARD_EMULATION)
+
+    private val _statusFlow = MutableStateFlow<CommStatus?>(null)
+    val statusFlow = _statusFlow.asStateFlow()
+
+    fun turnOn(activity: Activity): Boolean {
+        return try {
+            val action = if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) Settings.Panel.ACTION_NFC
+            else Settings.ACTION_NFC_SETTINGS
+
+            activity.startActivityForResult(Intent(action), 12)
+            true
         }
+        catch (e: Exception) {
+            logcat { e.stackTraceToString() }
+            false
+        }
+    }
 
-        sendReceiver.register(context, ACTION_RESPONSE)
+    suspend fun sendAsTag(content: String) {
+        _statusFlow.value = CommStatus.WAITING
 
-        val intent = Intent(context, HceService::class.java)
+        val hceIntent = Intent(context, HceService::class.java)
             .putExtra(EXTRA_MESSAGE, content)
-
-        context.startService(intent)
 
         val message = Message(
             _id = "",
@@ -85,6 +95,54 @@ class NfcManager(private val context: Context, private val localRepo: LocalRepos
             created_at = 0,
             updated_at = 0
         )
+
+        val sendReceiver = object: BroadcastReceiver() {
+            override fun onReceive(contextt: Context?, intent: Intent?) {
+                val me = this
+                ContextCompat.getMainExecutor(context).run {
+                    runBlocking {
+                        if(intent?.action == ACTION_RESPONSE) {
+                            intent.getStringExtra(EXTRA_STATUS)?.also {
+                                val status = CommStatus.valueOf(it)
+
+                                _statusFlow.value = status
+
+                                if(status == CommStatus.SENT) {
+                                    localRepo.saveMessage(message.copy(status = SendStatus.SENT), update = true)
+                                }
+                                else if(status == CommStatus.SEND_FAIL) {
+                                    localRepo.saveMessage(message.copy(status = SendStatus.FAIL), update = true)
+                                }
+
+                                if(status == CommStatus.DISCONNECTED) {
+                                    me.unregister(context)
+                                    context.stopService(hceIntent)
+                                }
+                            }
+
+                            val response = intent.getStringExtra(EXTRA_RESPONSE) ?: return@runBlocking
+
+                            val responseMessage = Message(
+                                _id = "",
+                                who = message.who,
+                                is_by_me = false,
+                                body = response,
+                                type = MessageType.NFC,
+                                status = SendStatus.SENT,
+                                created_at = 0,
+                                updated_at = 0
+                            )
+
+                            localRepo.saveMessage(responseMessage)
+                        }
+                    }
+                }
+            }
+        }
+
+        sendReceiver.register(context, ACTION_RESPONSE)
+
+        context.startService(hceIntent)
 
         localRepo.saveMessage(message)
     }
@@ -235,4 +293,4 @@ fun buildGetDataApdu(): ByteArray {
     return (GET_DATA_APDU_HEADER + "0FFF").hexToByteArray()
 }
 
-enum class CommStatus { SEARCHING, CONNECTING, CONNECTED, SENDING, SENT }
+enum class CommStatus { WAITING, SEARCHING, CONNECTING, CONNECTED, DISCONNECTED, SENDING, SENT, SEND_FAIL }

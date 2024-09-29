@@ -17,6 +17,18 @@
             app:menu="@menu/bluetooth"
             app:title="WiFi Direct"/>
 
+        <TextView
+            android:id="@+id/text_banner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingVertical="12dp"
+            android:background="#A6A1A1"
+            android:textColor="@color/white"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:gravity="center_horizontal"
+            tools:text="Ready or not"/>
+
         <Button
             android:id="@+id/button_new"
             android:layout_width="match_parent"

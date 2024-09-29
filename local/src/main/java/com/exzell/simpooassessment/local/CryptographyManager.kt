@@ -4,6 +4,7 @@ import android.content.Context
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import java.lang.Exception
 import java.security.Key
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -27,6 +28,15 @@ object CryptographyManager {
         return generateKey(generateKeyAlias(), true)
     }
 
+    fun checkIsEncrypted(data: String): Boolean {
+        return try {
+            decryptData(data)
+            true
+        }
+        catch(e: Exception) {
+            false
+        }
+    }
     fun encryptData(data: String): String {
         return encryptData(data.toByteArray())
     }
